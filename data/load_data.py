@@ -5,15 +5,18 @@ import numpy as np
 import pandas as pd
 import re
 from datetime import timedelta, datetime
+from sklearn.preprocessing import StandardScaler, OneHotEncoder, LabelEncoder
 from __init__ import get_base_path
 from scipy.io import arff
 
 load_dotenv()
-raw_data_path = get_base_path()+ os.getenv('RAW_DATA_DIR')
+print(get_base_path())
+raw_data_path = get_base_path() + os.getenv('RAW_DATA_DIR')
 clean_data_path = get_base_path() + os.getenv('CLEAN_DATA_DIR')
 label_file = raw_data_path + os.getenv('LABEL_FILE')
 marker_file = raw_data_path + os.getenv('MARKER_FILE')
 combined_csv = clean_data_path + os.getenv('COMBINED_DATA_FILE')
+combined_sample_csv = clean_data_path + os.getenv('COMBINED_DATA_SAMPLE_FILE')
 
 class DataLoader:
 
@@ -21,7 +24,7 @@ class DataLoader:
         pass
 
     def __str__(self):
-        print("DataLoader", dir(DataLoader))
+        print("DataLoader", dir(DataLoader), "configure file paths with .env")
 
     def load_arff_data(self, data_path: str) -> pd.DataFrame:
 
@@ -57,30 +60,100 @@ class DataPreprocessor:
     def __init__(self, data):
         self.data = data
         self.columns = data.columns.to_list()
+
         self.random_seed = int(os.getenv('RANDOM_SEED'))
-        # self.scaler = StandardScaler()
+        self.scaler = StandardScaler()
+        self.label_encoder = LabelEncoder()
+        self.one_hot_encoder = OneHotEncoder(sparse_output=False)
+
+        #---  FEATURES / COLUMNS ---#
+        self.id_cols = ['source_file','sample_id','scenario_type']
+
+        self.status_cols = [
+            'control_panel_log1','control_panel_log2','control_panel_log3','control_panel_log4', \
+            'relay1_log', 'relay2_log', 'relay3_log', 'relay4_log', \
+            'snort_log1', 'snort_log2', 'snort_log3', 'snort_log4', \
+            'R1_status_flag_for_relays','R2_status_flag_for_relays','R3_status_flag_for_relays','R4_status_flag_for_relays']
+
+        self.target_features = ['is_attack','scenario_class','marker']
+
+        self.R1_features = [i for i in self.data.columns if 'R1' in i]
+        self.R2_features = [i for i in self.data.columns if 'R2' in i]
+        self.R3_features = [i for i in self.data.columns if 'R3' in i]
+        self.R4_features = [i for i in self.data.columns if 'R4' in i]
+        self.magnitudes  = [i for i in self.data.columns if 'magnitude' in i]
+
+        self.cut_features = [i for i in self.data.columns if 'frequency' in i] \
+            + ['sample_id','source_file']
 
     def __str__(self):
-        pass
+        return f"DataPreprocessing Class: Contains dataframe: shape {self.data.shape}, columns {self.columns}, several preprocessing and feature engineering methods. Each method returns self for method chaining. See dir()."
+    
+    # --- DATA CLEANSING --- #
+    def cast_data_types(self):
+        """takes care pandas datatyping"""
+        # fix numeric typing
+        relays = ['R1','R2','R3','R4']
+        for r in relays:
+            self.data[f'{r}_appearance_impedance_for_relays'] = self.data[f'{r}_appearance_impedance_for_relays'].astype('float64')
 
-    # TO DO imputation columns for inferance
-    #       refactor preprocessing to map columns to dtypes
-    #       scaling
-    #       encoding
+        # fix byte string on marker class
+        self.data['marker'] = self.data['marker'].astype('int').astype('category')
 
+        # cast datetime str to datetime if it's already in the dataset, pass if it's not
+        try:
+            self.data['synthetic_datetime'] = pd.to_datetime(self.data['synthetic_datetime'])
+        except KeyError:
+            pass 
+
+        return self
+    
     def apply_event_labels(self, marker_file: str, key: str):
         markers = pd.read_csv(marker_file)
         self.data = self.data.merge(right=markers, how='left', on=key)
         return self
+
+    # --- TRANSFORMERS --- #
+    def std_scale_transform(self, cols: list, fit=True):
+        scaled_cols = self.data.loc[:,cols]
+        if fit:
+            self.scaler.fit(scaled_cols)
+        self.data[cols] = self.scaler.transform(scaled_cols)
+        return self
     
-    def binarize_class_feature(self, feature_name: str, new_name: str, criteria: list):
-        # labels 1 for class labels found in list else 0
+    def one_hot_transform(self, cols: list, fit=True):
+        # useful for log/status flags
+        encoded_cols = self.data.loc[:,cols]
+        if fit:
+            encoded_cols = self.one_hot_encoder.fit(encoded_cols)
+        new_cols = self.one_hot_encoder.get_feature_names_out()
+        return new_cols, self.one_hot_encoder.transform(encoded_cols)
+
+    # def label_encoder(self, target, fit=True)
+    #     _transformpd.get_dummies(encoded_cols, drop_first=True)
+    #     bin_df_cols = bin_df.columns.to_list()
+    #     df[bin_df_cols] = bin_df
+    #     df.drop(columns=binary_columns,inplace=True)
+    #     self.data[cols] = scaled_cols.apply(lambda x: np.log(x), axis=1)
+    #     return self
+
+    # TO DO imputation columns for inferance
+    #       refactor preprocessing to map columns to dtypes
+
+    # --- FEATURE ENGINEERING --- #   
+    def binarize_multi_class_feature(self, feature_name: str, new_name: str, criteria: list):
+        """for series: reduces multi class labels to binary. labels 1 for class labels found in list else 0"""
         criteria = [str.lower(i) for i in criteria]
-        self.data[new_name] = self.data[feature_name].apply(lambda x: 1 if x.lower() in criteria else 0)
+        self.data[new_name] = self.data[feature_name].apply(lambda x: True if x.lower() in criteria else False)
+        return self
+    
+    def binarize_status_flags(self, cols: list):
+        """for df or series - reduces several discrete codes found under _status_flag_for_relays - if 0 then False else True"""
+        self.data[cols] = self.data[cols].map(lambda x: False if x==0 else True)
         return self
 
     def generate_sample_ids(self, unique_columns=['marker','source_file']):
-        # if the class marker or file number changes, consider it the start of a new sample and increment id
+        """if the class marker or file number changes, consider it the start of a new sample and increment id"""
         np.random.seed(self.random_seed)
         key = np.random.randint(self.data.shape[0],high=None)
         sample_ids = []
@@ -121,40 +194,47 @@ class DataPreprocessor:
         self.data['synthetic_datetime'] = synthetic_datetime
         self.data['synthetic_datetime'] = pd.to_datetime(self.data['synthetic_datetime'])
         return self
-
-    def preprocess(self):
-        # fix numeric typing
-        relays = ['R1','R2','R3','R4']
-        for r in relays:
-            self.data[f'{r}_appearance_impedance_for_relays'] = self.data[f'{r}_appearance_impedance_for_relays'].astype('float64')
-
-        # fix byte string on marker class
-        self.data['marker'] = self.data['marker'].astype('int').astype('category')
-
-        # fix datetime
-        self.data['synthetic_datetime'] = pd.to_datetime(self.data['synthetic_datetime'])
+    
+    def sample_data(self, n_samples = None, replace=False) -> pd.DataFrame:
+        # full data is about 80MB, ~80K rows. this returns a smaller sample of the data
+        # randomly samples without replacement from bag of sample_ids
+        # default n is 1/3 of sample_ids
+        if n_samples == None:
+            n_samples = self.data['sample_id'].nunique() // 3
+        sample = np.random.choice(self.data['sample_id'].unique(), size=n_samples, replace=replace)
+        self.data = self.data.loc[self.data['sample_id'].isin(sample),:]
         return self
 
     def get_dataframe(self) -> pd.DataFrame:
         return self.data
+    
+    def preprocess_pipline(self, is_sample = False):
+        self.cast_data_types() \
+            .apply_event_labels(marker_file, 'marker') \
+            .binarize_multi_class_feature('scenario_class', 'is_attack', ['attack']) \
+            .binarize_status_flags([i for i in dp.columns if 'status_flag_for_relays' in i]) \
+            .generate_sample_ids() \
+            .generate_time_series()
+        
+        if is_sample:
+            self.sample_data()
 
+        return self
 
 if __name__ == '__main__':
-    if os.path.exists(combined_csv):
-        print(f"The expected data file already exists at path: {combined_csv}")
-    else:
-        # LOAD DATA
-        dl = DataLoader()
-        df = dl.load_arff_data(raw_data_path)
-        df = dl.apply_column_names(label_file, df)
 
-        # CLEAN DATA
-        dp = DataPreprocessor(df)
-        df = dp.preprocess() \
-            .apply_event_labels(marker_file, 'marker') \
-            .binarize_class_feature('scenario_class', 'is_attack', ['attack']) \
-            .generate_sample_ids() \
-            .generate_time_series() \
-            .get_dataframe()
-        df.to_csv(combined_csv)
-        print(f"Data written to: {combined_csv}")
+    # LOAD DATA
+    dl = DataLoader()
+    df = dl.load_arff_data(raw_data_path)
+    df = dl.apply_column_names(label_file, df)
+
+    # CLEAN DATA, FEATURE ENGINEERING
+    dp = DataPreprocessor(df)
+
+    df = dp.preprocess_pipline().get_dataframe()
+    df.to_csv(combined_csv)
+    print(f"Data written to: {combined_csv}")
+
+    df = dp.sample_data().get_dataframe()
+    df.to_csv(combined_sample_csv)
+    print(f"Data written to: {combined_sample_csv}")

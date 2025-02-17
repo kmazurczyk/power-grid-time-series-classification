@@ -1,10 +1,13 @@
+from dotenv import load_dotenv
 import os
 import sys
+
+load_dotenv()
 
 # UPDATE SEARCH PATH
 def get_base_path():
     cwd = os.path.basename(os.getcwd())
-    if cwd.lower() != 'power-grid-time-series-anomaly-detection':
+    if cwd.lower() != os.getenv('REPO_NAME'):
         return os.path.dirname(os.getcwd())
     else:
         return os.getcwd()
