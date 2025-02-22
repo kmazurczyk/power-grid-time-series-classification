@@ -32,7 +32,7 @@ class Signal:
         return np.linspace(0, time, self.timespan)
 
     def waveform(self, RMS_amp, theta) -> pd.Series:
-        # valid for voltage and current. expects theta in degrees
+        # valid for voltage and current. expects theta in degrees and converts to radians
         # synchrophasor magnitude is typically given as RMS value, so we must convert
         max_amp = RMS_amp * np.sqrt(2) 
         theta = self.degree_to_radian(theta)
@@ -47,17 +47,34 @@ class Signal:
         voltage_angle, current_angle = [self.degree_to_radian(i) for i in (voltage_angle, current_angle)]
         power_factor = np.cos(voltage_angle - current_angle)
         return (voltage_RMS_mag * current_RMS_mag / 2) * power_factor
-    
+
     # if we add impedance r
     # i * r = v
     # i^2 * r = w
     # i * v = w
 
-    def make_waves_iter(self, relays: list, phases: list, stats=['voltage','current','power'], zero=True) -> pd.DataFrame:
+    def mean_wave_smoothing(self, wave: pd.Series, window: int) -> pd.Series: 
+        # ideally include padding to avoid edge effects
+        pass
+
+    def describe_wave(self, wave: pd.Series) -> dict:
+        return {
+            'mean': wave.mean(),
+            'median': wave.median(),
+            'q25': wave.quantile(0.25),
+            'q75': wave.quantile(0.75),
+            'sigma': wave.std(),
+            'min': wave.min(),
+            'max': wave.max(),
+            'zero_crossing_rate': np.sum(np.diff(np.signbit(wave))) / len(wave) # proportion of times the signal crosses 0
+        }
+    
+    def make_waves_iter(self, relays=('R1','R2','R3','R4'), phases=('A','B','C'), stats=['voltage','current','power'], zero=True) -> pd.DataFrame:
         # easy way to dynamically calc/plot waveforms for relay, phase, stat combinations
         # modifies self.data and also returns columns if subsetting
 
         df = pd.DataFrame()
+        
         for i in relays: 
             for j in phases:
                 # V
@@ -99,6 +116,14 @@ class Signal:
                     df.drop(columns=zero_cols, inplace=True)
 
         self.data = pd.concat([self.data, df], axis=1)
+
+        # append datetime
+        try:
+            df['synthetic_datetime'] = self.data['synthetic_datetime']
+        except KeyError as e:
+            print('Add "synthetic_datetime" to your dataframe')
+            print(e)
+
         return df
     
 if __name__ == '__main__':
