@@ -149,33 +149,33 @@ def pad_collate(batch):
     x_lens = [len(x) for x in xx]
     y_lens = [len(y) for y in yy]
 
-    xx_pad = pad_sequence(xx, batch_first=True, padding_value=0)
-    yy_pad = pad_sequence(yy, batch_first=True, padding_value=0)
+    xx_pad = pad_sequence(xx, batch_first=True)
+    yy_pad = pad_sequence(yy, batch_first=True)
 
     return xx_pad, yy_pad, x_lens, y_lens
 
-class NonZeroLabelEncoder:
-    '''because we are going to use zero padding, we can't have any class encodings == 0'''
-    def __init__(self):
-        self.classes = None
-        self.encodings = None
-        self.mappings = None
+# class NonZeroLabelEncoder:
+#     '''because we are going to use zero padding, we can't have any class encodings == 0'''
+#     def __init__(self):
+#         self.classes = None
+#         self.encodings = None
+#         self.mappings = None
 
-    def fit(self,y) -> None:
-        self.classes = np.sort(np.unique(y))
-        self.mappings = tuple(enumerate(self.classes,start=1))
-        self.encodings = [i[0] for i in self.mappings]
+#     def fit(self,y) -> None:
+#         self.classes = np.sort(np.unique(y))
+#         self.mappings = tuple(enumerate(self.classes,start=1))
+#         self.encodings = [i[0] for i in self.mappings]
 
-    def transform(self,y) -> np.array:
-        mappings = {i[1]:i[0] for i in self.mappings}
-        y = y.map(mappings)
-        return y.to_numpy()
+#     def transform(self,y) -> np.array:
+#         mappings = {i[1]:i[0] for i in self.mappings}
+#         y = y.map(mappings)
+#         return y.to_numpy()
     
-    def reverse_transform(self,y) -> pd.Series:
-        mappings = {i[0]:i[1] for i in self.mappings}
-        y = pd.Series(y)
-        y = y.map(mappings)
-        return y
+#     def reverse_transform(self,y) -> pd.Series:
+#         mappings = {i[0]:i[1] for i in self.mappings}
+#         y = pd.Series(y)
+#         y = y.map(mappings)
+#         return y
 
 class SignalClassificationDataset(Dataset):
     def __init__(self, signals, labels, transform=None):
@@ -195,7 +195,7 @@ class SignalClassificationDataset(Dataset):
             signal = self.transform(signal)
 
         # signal to tensor
-        return torch.tensor(signal,dtype=torch.float), torch.tensor(label,dtype=torch.float)
+        return torch.tensor(signal,dtype=torch.float), torch.tensor(label,dtype=torch.long)
 
 class DynamicLSTM(nn.Module):
     def __init__(self, input_size, hidden_size=1, num_layers=1, dropout=0, output_size=1):
@@ -234,8 +234,7 @@ class DynamicLSTM(nn.Module):
         out = out_pad[:, -1, :] # get last state from LSTM
         out = self.fc(out)
 
-        # CLASS PREDICTION - raw logits should go to CrossEntropyLoss(), predict should be outside training loop
-        # out = self.softmax(out)
+        # CLASS PREDICTION - raw logits should go to CrossEntropyLoss()
         return out, (hn, cn)
 
 if __name__ == "__main__":
