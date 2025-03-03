@@ -2,6 +2,8 @@
 config.ini
 *.env
 
+to_do.txt
+
 # Data files
 *.csv
 *.xlsx

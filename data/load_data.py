@@ -6,15 +6,16 @@ import pandas as pd
 import re
 from datetime import timedelta, datetime
 from sklearn.preprocessing import StandardScaler, OneHotEncoder, LabelEncoder
+from signal_processing import Signal, make_waves_for_df
 from __init__ import get_base_path
 from scipy.io import arff
 
 load_dotenv()
-print(get_base_path())
 raw_data_path = get_base_path() + os.getenv('RAW_DATA_DIR')
 clean_data_path = get_base_path() + os.getenv('CLEAN_DATA_DIR')
 label_file = raw_data_path + os.getenv('LABEL_FILE')
 marker_file = raw_data_path + os.getenv('MARKER_FILE')
+raw_csv = clean_data_path + os.getenv('RAW_DATA_FILE')
 combined_csv = clean_data_path + os.getenv('COMBINED_DATA_FILE')
 combined_sample_csv = clean_data_path + os.getenv('COMBINED_DATA_SAMPLE_FILE')
 
@@ -77,18 +78,19 @@ class DataPreprocessor:
 
         self.target_features = ['is_attack','scenario_class','marker','scenario_type']
 
-        self.R1_features = [i for i in self.data.columns if 'R1' in i.lower()]
-        self.R2_features = [i for i in self.data.columns if 'R2' in i.lower()]
-        self.R3_features = [i for i in self.data.columns if 'R3' in i.lower()]
-        self.R4_features = [i for i in self.data.columns if 'R4' in i.lower()]
-        self.magnitudes  = [i for i in self.data.columns if 'magnitude' in i.lower()]
-        self.angles      = [i for i in self.data.columns if 'angle' in i.lower()]
-        self.frequencies = [i for i in self.data.columns if 'freq' in i.lower()]
-        self.impedance   = [i for i in self.data.columns if 'impedance' in i.lower()]
-        self.pos_neg_zero = [i for i in self.data.columns if 'zero' in i.lower()]
-        self.control_panels = [i for i in self.data.columns if 'control' in i.lower()]
-        self.snort       = [i for i in self.data.columns if 'snort' in i.lower()]
-        self.status_flags = [i for i in self.data.columns if 'status_flag' in i.lower()]
+        self.R1_features = [i for i in self.columns if 'R1' in i]
+        self.R2_features = [i for i in self.columns if 'R2' in i]
+        self.R3_features = [i for i in self.columns if 'R3' in i]
+        self.R4_features = [i for i in self.columns if 'R4' in i]
+        self.magnitudes  = [i for i in self.columns if 'magnitude' in i.lower()]
+        self.angles      = [i for i in self.columns if 'angle' in i.lower()]
+        self.frequencies = [i for i in self.columns if 'freq' in i.lower()]
+        self.impedance   = [i for i in self.columns if 'impedance' in i.lower()]
+        self.pos_neg_zero = [i for i in self.columns if 'zero' in i.lower()]
+        self.control_panels = [i for i in self.columns if 'control' in i.lower()]
+        self.snort       = [i for i in self.columns if 'snort' in i.lower()]
+        self.status_flags = [i for i in self.columns if 'status_flag' in i.lower()]
+        self.waves       = [i for i in self.columns if '_wave' in i.lower()]
 
 
     def __str__(self):
@@ -143,11 +145,18 @@ class DataPreprocessor:
         new_cols = self.one_hot_encoder.get_feature_names_out()
         return new_cols, self.one_hot_encoder.transform(encoded_cols)
 
+    def log_scale_transform(self, cols: list):
+        # useful for pre-processing magnitude columns, which have high variance and >= 0
+        # log_x+1 so useful for display but not statistical
+        scaled_cols = self.data.loc[:,cols]
+        self.data[cols] = scaled_cols.apply(lambda x: np.log1p(x), axis=1)
+        return self
+
     # --- FEATURE ENGINEERING --- #   
     def binarize_classes(self, feature_name: str, new_feature_name: str, criteria: list):
         """for series: reduces multi class labels to binary. labels 1 for class labels found in list else 0"""
         criteria = [str.lower(i) for i in criteria]
-        self.data[new_feature_name] = self.data[feature_name].apply(lambda x: True if x.lower() in criteria else False)
+        self.data[new_feature_name] = self.data[feature_name].apply(lambda x: 1 if x.lower() in criteria else 0)
         return self
     
     def binarize_values(self, cols: list, value=np.inf):
@@ -157,8 +166,8 @@ class DataPreprocessor:
         return self
 
     def binarize_status_flags(self, cols: list):
-        """for df or series - reduces several discrete codes found under _status_flag_for_relays - if 0 then False else True"""
-        self.data[cols] = self.data[cols].map(lambda x: False if x==0 else True)
+        """for df or series - reduces several discrete codes found under _status_flag_for_relays - if 0 then 0 else 1"""
+        self.data[cols] = self.data[cols].map(lambda x: 0 if x==0 else 1)
         return self
 
     def generate_sample_ids(self, unique_columns=['marker','source_file']):
@@ -188,14 +197,14 @@ class DataPreprocessor:
         max_sample_length = self.data.loc[:,['sample_id','marker']].groupby('sample_id').count().max().to_numpy()[0]
         min_increment = int(max_sample_length // 120 + 1)
         delta = timedelta(seconds=1/120)            # time increment within the sample
-        offset = timedelta(seconds=min_increment)   # offset between samples
+        # offset = timedelta(seconds=min_increment)   # offset between samples
 
         # partition the samples
         sample_id_counts = self.data['sample_id'].value_counts().to_dict()
 
         # increment time
         for s, n in sample_id_counts.items():
-            timestamp += offset                     # offset isn't working
+            # timestamp += offset                     # offset isn't working
             for i in range(n):
                 timestamp += delta
                 synthetic_datetime += [timestamp]
@@ -205,7 +214,7 @@ class DataPreprocessor:
         return self
     
     def sample_data(self, n_samples = None, replace=False) -> pd.DataFrame:
-        # full data is about 80MB, ~80K rows. this returns a smaller sample of the data
+        # full data is about 80MB, 220 after feature engineering, ~80K rows. this returns a smaller sample of the data.
         # randomly samples without replacement from bag of sample_ids
         # default n is 1/3 of sample_ids
         if n_samples == None:
@@ -217,17 +226,15 @@ class DataPreprocessor:
     def get_dataframe(self) -> pd.DataFrame:
         return self.data
     
-    def preprocess_pipline(self, is_sample = False):
+    def preprocess_pipeline(self):
         self.cast_data_types() \
             .apply_event_labels(marker_file, 'marker') \
             .binarize_classes('scenario_class', 'is_attack', ['attack']) \
             .binarize_status_flags([i for i in dp.columns if 'status_flag_for_relays' in i]) \
+            .binarize_values(self.impedance) \
+            .log_scale_transform(self.magnitudes) \
             .generate_sample_ids() \
             .generate_time_series()
-        
-        if is_sample:
-            self.sample_data()
-
         return self
 
 if __name__ == '__main__':
@@ -236,15 +243,24 @@ if __name__ == '__main__':
     dl = DataLoader()
     df = dl.load_arff_data(raw_data_path)
     df = dl.apply_column_names(label_file, df)
+    df.to_csv(raw_csv)
+    print(f"Raw data written to: {combined_csv}")
 
     # CLEAN DATA, FEATURE ENGINEERING
     dp = DataPreprocessor(df)
+    df = dp.preprocess_pipeline().get_dataframe()
+    df = make_waves_for_df(df)
 
-    df = dp.preprocess_pipline().get_dataframe()
+    # drop sample with line shift on R4 values, indexes 19424:19431
+    s15936 = df.loc[df['sample_id']==15936,:]
+    df.drop(index=s15936.index, inplace=True)
+
     df.to_csv(combined_csv)
-    print(f"Data written to: {combined_csv}")
+    print(f"Pre-processed data written to: {combined_csv}")
 
+    # DEV SAMPLE
+    dp = DataPreprocessor(df)
     dp.sample_data()
     df = dp.get_dataframe()
     df.to_csv(combined_sample_csv)
-    print(f"Data written to: {combined_sample_csv}")
+    print(f"Dev sample data written to: {combined_sample_csv}")
