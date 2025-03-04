@@ -149,33 +149,34 @@ def pad_collate(batch):
     x_lens = [len(x) for x in xx]
     y_lens = [len(y) for y in yy]
 
-    xx_pad = pad_sequence(xx, batch_first=True, padding_value=0)
-    yy_pad = pad_sequence(yy, batch_first=True, padding_value=0)
+    xx_pad = pad_sequence(xx, batch_first=True)
+    yy_pad = pad_sequence(yy, batch_first=True)
 
     return xx_pad, yy_pad, x_lens, y_lens
 
-class NonZeroLabelEncoder:
-    '''because we are going to use zero padding, we can't have any class encodings == 0'''
-    def __init__(self):
-        self.classes = None
-        self.encodings = None
-        self.mappings = None
+# class NonZeroLabelEncoder:
+#     '''because we are going to use zero padding, we can't have any class encodings == 0'''
+#     def __init__(self):
+#         self.classes = None
+#         self.encodings = None
+#         self.mappings = None
 
-    def fit(self,y) -> None:
-        self.classes = np.sort(np.unique(y))
-        self.mappings = tuple(enumerate(self.classes,start=1))
-        self.encodings = [i[0] for i in self.mappings]
+#     def fit(self,y) -> None:
+#         self.classes = np.sort(np.unique(y))
+#         self.mappings = tuple(enumerate(self.classes,start=1))
+#         self.encodings = [i[0] for i in self.mappings]
 
-    def transform(self,y) -> np.array:
-        mappings = {i[1]:i[0] for i in self.mappings}
-        y = y.map(mappings)
-        return y.to_numpy()
+#     def transform(self,y) -> np.array:
+#         mappings = {i[1]:i[0] for i in self.mappings}
+#         y = y.map(mappings)
+#         return y.to_numpy()
     
-    def reverse_transform(self,y) -> pd.Series:
-        mappings = {i[0]:i[1] for i in self.mappings}
-        y = pd.Series(y)
-        y = y.map(mappings)
-        return y
+#     def reverse_transform(self,y) -> pd.Series:
+#         mappings = {i[0]:i[1] for i in self.mappings}
+#         y = pd.Series(y)
+#         y = y.map(mappings)
+#         return y
+
 
 class SignalClassificationDataset(Dataset):
     def __init__(self, signals, labels, transform=None):
@@ -187,18 +188,42 @@ class SignalClassificationDataset(Dataset):
         return len(self.signals)
 
     def __getitem__(self, idx):
-        signal = self.signals[idx]
-        label = self.labels[idx]
+        signal = torch.tensor(self.signals[idx],dtype=torch.float)
+        label = torch.tensor(self.labels[idx],dtype=torch.long)
 
         # transform
         if self.transform is not None:
-            signal = self.transform(signal)
+            signal, label = self.transform(signal,label)
 
         # signal to tensor
-        return torch.tensor(signal,dtype=torch.float), torch.tensor(label,dtype=torch.float)
+        return signal, label
+    
+class AugmentMinorityClass(object):
+    """augment minority classes with strided samples that have some noise added"""
+    def __init__(self, target_classes, stride=None):
+        self.target_classes = target_classes
+        self.stride = stride
+
+    def __call__(self, signal, label):
+        signal_len, feature_len = signal.size()
+        
+        if self.stride == None:
+            self.stride = (1,feature_len)               # move down one row at a time, across features
+        window_size = (len(signal) // 3, feature_len)   # about 1/3 size of the data
+        
+        if label in self.target_classes:
+            # stride
+            signal = torch.as_strided(signal,
+                                      size= window_size,
+                                      stride = self.stride)
+
+            # add some noise
+            signal = signal + (torch.randn(signal.size(0),signal.size(1))*0.01)
+
+        return signal, label          
 
 class DynamicLSTM(nn.Module):
-    def __init__(self, input_size, hidden_size=1, num_layers=1, dropout=0, output_size=1):
+    def __init__(self, input_size, hidden_size=1, num_layers=1, drop_out=0, output_size=1):
         super().__init__()
 
         # data attributes
@@ -208,15 +233,25 @@ class DynamicLSTM(nn.Module):
         # model attributes
         self.num_layers = num_layers
         self.hidden_size = hidden_size
-        self.dropout = dropout
+        self.dropout = drop_out
         self.lstm = nn.LSTM(input_size,
                             hidden_size,
                             num_layers, 
                             batch_first = True, 
-                            dropout=dropout)
+                            dropout=drop_out)
         self.fc = nn.Linear(hidden_size, output_size)
         # self.softmax = nn.Softmax(dim=1)
-        
+
+        # model evaluation
+        self.train_logits = []
+        self.train_predictions = []
+        self.train_loss_epoch = []
+        self.train_accuracy_epoch = []
+
+        self.test_logits = []
+        self.test_loss = None
+        self.test_accuracy = None
+
     def forward(self, x, x_lens):
         # PACK
         packed_x = pack_padded_sequence(x, x_lens, batch_first=True, enforce_sorted=False)
@@ -234,9 +269,46 @@ class DynamicLSTM(nn.Module):
         out = out_pad[:, -1, :] # get last state from LSTM
         out = self.fc(out)
 
-        # CLASS PREDICTION - raw logits should go to CrossEntropyLoss(), predict should be outside training loop
-        # out = self.softmax(out)
+        # CLASS PREDICTION - raw logits should go to CrossEntropyLoss()
         return out, (hn, cn)
+
+    def lstm_train(self, dataloader, criterion, optimizer, n_epochs=5):
+        # for evaluation
+        n_samples = 0
+        n_correct = 0
+
+        for epoch in range(n_epochs):
+            for i, (x, y, x_lens, y_lens) in enumerate(dataloader):
+                # reset gradients
+                optimizer.zero_grad()
+                y = y.view(-1)
+                
+                # forward
+                out, __ = self(x, x_lens)
+                loss = criterion(out, y)
+            
+                # back
+                loss.backward()
+                optimizer.step()
+           
+                # evaluation
+                __, predicted = torch.max(out, 1)
+                correct = (predicted == y).sum().detach().numpy() # .item() doesn't seem to agg accurately
+                n_samples += y.size(0)
+                n_correct += correct      
+
+                self.train_logits += [out]
+                self.train_predictions += [predicted]
+
+                if i % 10 == 0:
+                    print(f"Epoch: {epoch+1}/{n_epochs}, Step {i+1}, Training Loss {loss.item():.4f}, Accuracy {n_correct/n_samples:.4f}")
+            
+            # track performance per epoch
+            self.train_loss_epoch += [loss]
+            self.train_accuracy_epoch += [n_correct / n_samples]
+
+    def lstm_test(self, dataloader, criterion):
+        pass
 
 if __name__ == "__main__":
     pass 
