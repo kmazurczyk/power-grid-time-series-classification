@@ -1,13 +1,20 @@
-from dotenv import load_dotenv
+from copy import deepcopy
+from itertools import product
 import os
+
 import numpy as np
 import pandas as pd
+
+from dotenv import load_dotenv
 from __init__ import get_base_path
+
 from sklearn.compose import ColumnTransformer
 from sklearn.model_selection import TimeSeriesSplit
-from sklearn.preprocessing import LabelEncoder, TargetEncoder, StandardScaler
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.pipeline import Pipeline
-from sklearn.metrics import accuracy_score, confusion_matrix, ConfusionMatrixDisplay, classification_report, roc_curve, RocCurveDisplay
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, \
+    multilabel_confusion_matrix, ConfusionMatrixDisplay, classification_report
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -17,17 +24,19 @@ from torch.nn.utils.rnn import pack_padded_sequence, pad_sequence, pad_packed_se
 
 random_seed = int(os.getenv('RANDOM_SEED'))
 torch.manual_seed(random_seed)
-rnn_data_dir = get_base_path() + os.getenv('RNN_DATA_DIR')
 
 class FeatureStore:
     def __init__(self, data):
         self.data = data
-        self.R1_waves = [i for i in data.columns if 'r1' in i.lower() and 'wave' in i.lower()]
-        self.R1_R2_waves = [i for i in data.columns if ('r1' in i.lower() or 'r2' in i.lower()) and 'wave' in i.lower()]
+        self.R1_RMS = [i for i in data.columns if 'r1' in i.lower() and 'magnitude' in i.lower() and 'zero' not in i.lower()]
+        self.R1_waves = [i for i in data.columns if 'r1' in i.lower() and 'wave' in i.lower() and 'zero' not in i.lower()]
+        self.R1_R2_RMS = [i for i in data.columns if ('r1' in i.lower() or 'r2' in i.lower()) and 'magnitude' in i.lower() and 'zero' not in i.lower()]
+        self.R1_R2_waves = [i for i in data.columns if ('r1' in i.lower() or 'r2' in i.lower()) and 'wave' in i.lower() and 'zero' not in i.lower()]
+        self.all_power_waves = [i for i in data.columns if 'wave' in i.lower() and 'power' in i.lower() and 'zero' not in i.lower()]
         self.y_binary = 'is_attack'
         self.y_tertiary = 'scenario_class'
-        self.y_broad_class = 'scenario_type'
-        self.y_full_class = 'marker'
+        self.y_broad_class = 'scenario_broad_type'
+        self.y_full_class = 'scenario_type'
 
     def __str__(self):
         print(f'''Feature Store giving column names for a dataframe 
@@ -39,47 +48,6 @@ class FeatureStore:
         y_tertiary {self.y_tertiary}
         y_broad_class {self.y_broad_class}
         y_full_class {self.y_full_class}''')
-
-# ClassificationModel class with scoring
-class ClassificationModel:
-    def __init__(self, model, config: dict):
-        self.model = model
-        self.metrics = []
-        self.config = config
-    
-    def __str__(self):
-        return f"Model: {self.model} configured with {self.config} metrics {self.metrics}"
-
-    def train(self, X, y) -> None:
-        return self.model.fit(X)
-
-    def predict(self, X) -> np.array:
-        return self.model.predict(X)
-
-    def accuracy_score(self, X, y):
-        return accuracy_score(y, self.predict(X))
-
-    def confusion_matrix_from_model(self, X, y, y_labels:list, display=True):
-        if display:
-            ConfusionMatrixDisplay.from_estimator(
-                self.model,
-                X,
-                y,
-                display_labels=y_labels,
-                normalize='all',
-            )
-            plt.title(f'Confusion matrix {self.model}, {y.columns()} (normalized)')
-            plt.show()
-        return confusion_matrix(self.predict(X), y, labels=y_labels)
-
-    def roc_curve(self, X, y, display=True):
-        pass
-
-    def classification_report_from_model(self, X, y, display=True):
-        c = classification_report(self.predict(X), y, labels=y_labels)
-        if display:
-            print(c)
-        return c
 
 def timeseries_train_test_split(X,y,test_size=None):
     '''
@@ -141,10 +109,100 @@ def grab_bag_train_test_split(X,y,id_series='sample_id',test_size=None,return_id
     else:
         return X_train, y_train, X_test, y_test
 
-# padding function that will be used for dataloader parameter collate_fn
-# syntax from https://suzyahyah.github.io/pytorch/2019/07/01/DataLoader-Pad-Pack-Sequence.html
+
+class SK_Classification_Experiment:
+    '''
+    loop through feature and model selection for SKLearn Classifiers
+    returns list of length (x_features * y_features * n_estimators)
+    list items are dict() of train/test classification scores and a deepcopy of the estimator for access to attributes
+    '''
+
+    def __init__(self, data:pd.DataFrame, X_feature_list:list, y_feature_list:list, estimators:list, splitter=timeseries_train_test_split, scaler=StandardScaler, target_encoder=LabelEncoder(), random_seed=random_seed):
+        self.data = data
+        self.X_feature_list = X_feature_list
+        self.y_feature_list = y_feature_list
+        self.estimators = estimators
+        self.splitter = splitter
+        self.scaler = scaler()
+        self.target_encoder = target_encoder
+        self.random_seed = random_seed
+        self.experiment_scores = []
+    
+    def permute_features(self):
+        return product(self.X_feature_list, self.y_feature_list)
+
+    def train_test_split(self,x_features,y_feature):
+        X = self.data.loc[:,x_features]
+        y = self.data.loc[:,y_feature]
+        return self.splitter(X, y)
+
+    def run_experiments(self):
+        # permute features
+        for x, y in self.permute_features():
+            # train test split
+            X_train, y_train, X_test, y_test = self.train_test_split(x,y)
+            
+            # target encoding
+            if self.target_encoder is not None:
+                enc = self.target_encoder.fit(y_train)
+                y_train, y_test = enc.transform(y_train), enc.transform(y_test)
+                labels = [i for i,j in enumerate(enc.classes_)]
+                target_names = [str(i) for i in enc.classes_]
+            else:
+                labels = [i for i,j in enumerate(self.data[y].unique())]
+                target_names = self.data[y].unique()
+
+            # preprocessor
+            if isinstance(X_train,pd.DataFrame):
+                numeric_features = X_train.select_dtypes('number').columns
+            elif isinstance(X_train,pd.Series) and is_numeric_dtype(X_train):
+                numeric_features = [X_train.name]
+            else: 
+                print('No numeric features found in X')
+
+            preprocessor = ColumnTransformer(
+                transformers=[('scaler', self.scaler, numeric_features)], remainder='passthrough')
+        
+            for estimator in self.estimators:
+                # train
+                pipe = Pipeline([
+                        ('preprocessor', preprocessor),
+                        ('estimator', estimator)
+                    ])
+
+                pipe.fit(X_train, y_train)
+
+                # test
+                train_pred, test_pred = pipe.predict(X_train), pipe.predict(X_test)
+
+                # classification scores
+                self.experiment_scores += [{
+                    'X_features':x,
+                    'y_features':y,
+                    'y_classes':target_names,
+                    'estimator':deepcopy(estimator),
+                    'train_true':y_train,
+                    'train_pred':train_pred,
+                    'test_true':y_test,
+                    'test_pred':test_pred,
+                    'training_classification_report':classification_report(y_train, train_pred, labels=labels, target_names=target_names),
+                    'training_confusion_matrix':multilabel_confusion_matrix(y_train, train_pred, labels=labels),
+                    'train_recall':recall_score(y_train, train_pred, labels=labels, average='macro'),
+                    'train_precision':precision_score(y_train, train_pred, labels=labels, average='macro'),
+                    'train_f1':f1_score(y_train, train_pred, labels=labels, average='macro'),
+                    'train_accuracy':accuracy_score(y_train, train_pred),
+                    'test_classification_report':classification_report(y_test, test_pred, labels=labels, target_names=target_names),
+                    'test_confusion_matrix':multilabel_confusion_matrix(y_test, test_pred, labels=labels),
+                    'test_recall':recall_score(y_test, test_pred, labels=labels, average='macro'),
+                    'test_precision':precision_score(y_test, test_pred, labels=labels, average='macro'),
+                    'test_f1':f1_score(y_test, test_pred, labels=labels, average='macro'),
+                    'test_accuracy':accuracy_score(y_test, test_pred)
+                        }]
 
 def pad_collate(batch):
+    """padding function that will be used for dataloader parameter collate_fn
+    ref https://suzyahyah.github.io/pytorch/2019/07/01/DataLoader-Pad-Pack-Sequence.html"""
+
     (xx,yy) = zip(*batch)
     x_lens = [len(x) for x in xx]
     y_lens = [len(y) for y in yy]
@@ -154,42 +212,19 @@ def pad_collate(batch):
 
     return xx_pad, yy_pad, x_lens, y_lens
 
-# class NonZeroLabelEncoder:
-#     '''because we are going to use zero padding, we can't have any class encodings == 0'''
-#     def __init__(self):
-#         self.classes = None
-#         self.encodings = None
-#         self.mappings = None
-
-#     def fit(self,y) -> None:
-#         self.classes = np.sort(np.unique(y))
-#         self.mappings = tuple(enumerate(self.classes,start=1))
-#         self.encodings = [i[0] for i in self.mappings]
-
-#     def transform(self,y) -> np.array:
-#         mappings = {i[1]:i[0] for i in self.mappings}
-#         y = y.map(mappings)
-#         return y.to_numpy()
-    
-#     def reverse_transform(self,y) -> pd.Series:
-#         mappings = {i[0]:i[1] for i in self.mappings}
-#         y = pd.Series(y)
-#         y = y.map(mappings)
-#         return y
-
-
 class SignalClassificationDataset(Dataset):
-    def __init__(self, signals, labels, transform=None):
+    def __init__(self, signals, labels, device, transform=None):
         self.signals = signals
         self.labels = labels
         self.transform = transform
+        self.device = device
 
     def __len__(self):
         return len(self.signals)
 
     def __getitem__(self, idx):
-        signal = torch.tensor(self.signals[idx],dtype=torch.float)
-        label = torch.tensor(self.labels[idx],dtype=torch.long)
+        signal = torch.tensor(self.signals[idx],dtype=torch.float).to(self.device)
+        label = torch.tensor(self.labels[idx],dtype=torch.long).to(self.device)
 
         # transform
         if self.transform is not None:
@@ -200,9 +235,10 @@ class SignalClassificationDataset(Dataset):
     
 class AugmentMinorityClass(object):
     """augment minority classes with strided samples that have some noise added"""
-    def __init__(self, target_classes, stride=None):
+    def __init__(self, target_classes, device, stride=None):
         self.target_classes = target_classes
         self.stride = stride
+        self.device = device
 
     def __call__(self, signal, label):
         signal_len, feature_len = signal.size()
@@ -215,10 +251,10 @@ class AugmentMinorityClass(object):
             # stride
             signal = torch.as_strided(signal,
                                       size= window_size,
-                                      stride = self.stride)
+                                      stride = self.stride).to(self.device)
 
             # add some noise
-            signal = signal + (torch.randn(signal.size(0),signal.size(1))*0.01)
+            signal = signal + (torch.randn(signal.size(0),signal.size(1),device=self.device)*0.01)
 
         return signal, label          
 
@@ -293,7 +329,7 @@ class DynamicLSTM(nn.Module):
            
                 # evaluation
                 __, predicted = torch.max(out, 1)
-                correct = (predicted == y).sum().detach().numpy() # .item() doesn't seem to agg accurately
+                correct = (predicted == y).sum().item()
                 n_samples += y.size(0)
                 n_correct += correct      
 
@@ -309,6 +345,6 @@ class DynamicLSTM(nn.Module):
 
     def lstm_test(self, dataloader, criterion):
         pass
-
+            
 if __name__ == "__main__":
     pass 
