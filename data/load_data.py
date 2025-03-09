@@ -229,13 +229,28 @@ class DataPreprocessor:
     def preprocess_pipeline(self):
         self.cast_data_types() \
             .apply_event_labels(marker_file, 'marker') \
-            .binarize_classes('scenario_class', 'is_attack', ['attack']) \
             .binarize_status_flags([i for i in dp.columns if 'status_flag_for_relays' in i]) \
             .binarize_values(self.impedance) \
             .log_scale_transform(self.magnitudes) \
             .generate_sample_ids() \
             .generate_time_series()
+            # .binarize_classes('scenario_class', 'is_attack', ['attack']) \
+
         return self
+
+def load_from_csv(csv_file):      
+    if os.path.exists(csv_file):
+        pass
+    else:
+        load_data.__main__()
+    df = pd.read_csv(csv_file,index_col=0)
+
+    # data typing that is not retained by CSV
+    dp = DataPreprocessor(df)
+    df = dp.cast_data_types().get_dataframe()
+
+    print(df.shape)
+    return df
 
 if __name__ == '__main__':
 
