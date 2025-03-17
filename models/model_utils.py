@@ -109,7 +109,6 @@ def grab_bag_train_test_split(X,y,id_series='sample_id',test_size=None,return_id
     else:
         return X_train, y_train, X_test, y_test
 
-
 class SK_Classification_Experiment:
     '''
     loop through feature and model selection for SKLearn Classifiers
@@ -213,6 +212,7 @@ def pad_collate(batch):
     return xx_pad, yy_pad, x_lens, y_lens
 
 class SignalClassificationDataset(Dataset):
+    '''PyTorch Dataset Class'''
     def __init__(self, signals, labels, device, transform=None):
         self.signals = signals
         self.labels = labels
@@ -234,7 +234,7 @@ class SignalClassificationDataset(Dataset):
         return signal, label
     
 class AugmentMinorityClass(object):
-    """augment minority classes with strided samples that have some noise added"""
+    """PyTorch: augment minority classes with strided samples that have some noise added"""
     def __init__(self, target_classes, device, stride=None):
         self.target_classes = target_classes
         self.stride = stride
@@ -259,6 +259,7 @@ class AugmentMinorityClass(object):
         return signal, label          
 
 class DynamicLSTM(nn.Module):
+    '''PyTorch LSTM'''
     def __init__(self, input_size, hidden_size=1, num_layers=1, drop_out=0, output_size=1):
         super().__init__()
 
@@ -285,8 +286,10 @@ class DynamicLSTM(nn.Module):
         self.train_accuracy_epoch = []
 
         self.test_logits = []
-        self.test_loss = None
-        self.test_accuracy = None
+        # self.test_trues = []
+        self.test_predictions = []
+        self.test_loss = []
+        self.test_accuracy = []
 
     def forward(self, x, x_lens):
         # PACK
@@ -344,7 +347,33 @@ class DynamicLSTM(nn.Module):
             self.train_accuracy_epoch += [n_correct / n_samples]
 
     def lstm_test(self, dataloader, criterion):
-        pass
+        with torch.no_grad():
+
+            n_samples = 0
+            n_correct = 0
+
+            for i, (x, y, x_lens, y_lens) in enumerate(dataloader):
+                y = y.view(-1)
+
+                out, __ = self(x, x_lens)
+                loss = criterion(out, y)
+                self.test_logits == [out]
+                self.test_loss += [loss]
+            
+                # predict
+                __, predicted = torch.max(out, 1)
+                self.test_predictions += [predicted]
+                # self.test_trues += [y]
+            
+                # track accuracy
+                correct = (predicted == y).cpu().sum().detach().numpy()
+                n_samples += y.size(0)
+                n_correct += correct
+                self.test_accuracy += [n_correct / n_samples]
+                
+                # evaluate periodically
+                if (i+1) % 100 != 0:
+                    print(f"Batch {i+1}, Test Loss {loss.item():.4f}, Accuracy {n_correct/n_samples:.4f}")
             
 if __name__ == "__main__":
     pass 
