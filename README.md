@@ -17,15 +17,15 @@ The attack classification problem was structured as a series of experiments havi
 Each classifier was trained and assessed starting with attacks/non-attacks as the target prediction, gradually building up to the fully detailed event labels in the original dataset.
 
 Target variable – increasing class complexity
-•	binary classes: attack/no attack
-•	tertiary classes: attack/natural event/no event
-•	scenario broad class: k = 7
-•	full class: k = 37
+* binary classes: attack/no attack
+* tertiary classes: attack/natural event/no event
+* scenario broad class: k = 7
+* full class: k = 37
 
 18 features were selected through PCA and were also incorporated additively, trialing in three feature sets:
-•	One feature: R1 Power Wave
-•	9 features: All Waves from R1
-•	18 features: All Waves from R1 and R2
+* One feature: R1 Power Wave
+* 9 features: All Waves from R1
+* 18 features: All Waves from R1 and R2
 
 Each model's predictions were assessed using accuracy and F1. 
 
