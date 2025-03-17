@@ -1,5 +1,4 @@
-# power-grid-time-series-anomaly-detection
-Detecting Cyber Attacks on a Power Grid with ML
+# Detecting Cyber Attacks on a Power Grid with ML
 
 ### Description
 
@@ -46,10 +45,11 @@ Since no model met the performance criteria of this project, each of these findi
 
 ### Usage
 
-1. Download data from https://sites.google.com/a/uah.edu/tommy-morris-uah/ics-data-sets to a subfolder, data/raw/
-2. Run load_data.py
-3. Explore the data - EDA found under notebooks/
-4. Run a model - model notebooks found under models/
+1. Download data from https://sites.google.com/a/uah.edu/tommy-morris-uah/ics-data-sets
+2. Save files from #1, and the event_marker.csv and column_label.csv in a subfolder, data/raw/
+3. Run load_data.py
+4. Explore the data - EDA found under notebooks/
+5. Run a model - model notebooks found under models/
     
 ### References
 
