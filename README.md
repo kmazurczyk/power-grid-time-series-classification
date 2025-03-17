@@ -45,11 +45,9 @@ Since no model met the performance criteria of this project, each of these findi
 
 ### Usage
 
-1. Download data from https://sites.google.com/a/uah.edu/tommy-morris-uah/ics-data-sets
-2. Save files from #1, and the event_marker.csv and column_label.csv in a subfolder, data/raw/
-3. Run load_data.py
-4. Explore the data - EDA found under notebooks/
-5. Run a model - model notebooks found under models/
+* data/ pre-processing utilities
+* notebooks/ exploratory analysis
+* models/ models and feature store
     
 ### References
 
