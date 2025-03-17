@@ -1,0 +1,42 @@
+marker,scenario_type,scenario_class,scenario_broad_type,is_attack
+1,Fault from 10-19% on L1,natural,natural fault,not attack
+2,Fault from 20-79% on L1,natural,natural fault,not attack
+3,Fault from 80-90% on L1,natural,natural fault,not attack
+4,Fault from 10-19% on L2,natural,natural fault,not attack
+5,Fault from 20-79% on L2,natural,natural fault,not attack
+6,Fault from 80-90% on L2,natural,natural fault,not attack
+7,Fault from 10-19% on L1 with data injection tripping command,attack,data injection,attack
+8,Fault from 20-79% on L1 with data injection tripping command,attack,data injection,attack
+9,Fault from 80-90% on L1 with data injection tripping command,attack,data injection,attack
+10,Fault from 10-19% on L2 with data injection tripping command,attack,data injection,attack
+11,Fault from 20-79% on L2 with data injection tripping command,attack,data injection,attack
+12,Faultfrom 80-90% on L2 with data injection tripping command,attack,data injection,attack
+13,L1 line maintenance,natural,natural maintenance,not attack
+14,L2 line maintenance,natural,natural maintenance,not attack
+15,Command Injection to R1,attack,command injection,attack
+16,Command Injection to R2,attack,command injection,attack
+17,Command Injection to R3,attack,command injection,attack
+18,Command Injection to R4,attack,command injection,attack
+19,Command injection to R1 and R2,attack,command injection,attack
+20,Command injection to R3 and R4,attack,command injection,attack
+21,Fault from 10-19% on L1 with R1 disabled & fault,attack,attack fault,attack
+22,Fault from 20-90% on L1 with R1 disabled & fault,attack,attack fault,attack
+23,Fault from 10-49% on L1 with R2 disabled & fault,attack,attack fault,attack
+24,Fault from 50-79% on L1 with R2 disabled & fault,attack,attack fault,attack
+25,Fault from 80-90% on L1 with R2 disabled & fault,attack,attack fault,attack
+26,Fault from 10-19% on L2 with R3 disabled & fault,attack,attack fault,attack
+27,Fault from 20-90% on L2 with R3 disabled & fault,attack,attack fault,attack
+28,Fault from 50-90% on L2 with R3 disabled & fault,attack,attack fault,attack
+29,Fault from 10-79% on L2 with R4 disabled & fault,attack,attack fault,attack
+30,Fault from 80-90% on L2 with R4 disabled & fault,attack,attack fault,attack
+31,unknown,unknown,unknown,unknown
+32,unknown,unknown,unknown,unknown
+33,unknown,unknown,unknown,unknown
+34,unknown,unknown,unknown,unknown
+35,Fault from 10-49% on L1 with R1 and R2 disabled & fault,attack,attack fault,attack
+36,Fault from 50-90% on L1 with R1 and R2 disabled & fault,attack,attack fault,attack
+37,Fault from 10-49% on L1 with R3 and R4 disabled & fault,attack,attack fault,attack
+38,Fault from 50-90% on L1 with R3 and R4 disabled & fault,attack,attack fault,attack
+39,L1 maintenance with R1 and R2 disabled,attack,attack maintenance,attack
+40,L1 maintenance with R1 and R2 disabled,attack,attack maintenance,attack
+41,normal operation load changes,no event,no event,not attack
